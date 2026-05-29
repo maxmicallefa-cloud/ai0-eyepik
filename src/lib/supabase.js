@@ -159,13 +159,29 @@ export const uploadDocumentFile = async (file, companyId, userId) => {
 
 // ── AI extraction via Edge Function (avoids CORS) ─────────────────────────
 export async function extractDocumentWithAI(file, companyType) {
-  // Convert file to base64
-  const base64 = await new Promise((res, rej) => {
-    const reader = new FileReader()
-    reader.onload  = () => res(reader.result.split(',')[1])
-    reader.onerror = rej
-    reader.readAsDataURL(file)
-  })
+  let base64, mediaType
+
+  // For images: resize to max 1200px to reduce payload size
+  if (file.type.startsWith('image/')) {
+    const bitmap = await createImageBitmap(file)
+    const canvas = document.createElement('canvas')
+    const MAX = 1200
+    const ratio = Math.min(MAX / bitmap.width, MAX / bitmap.height, 1)
+    canvas.width  = Math.round(bitmap.width  * ratio)
+    canvas.height = Math.round(bitmap.height * ratio)
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+    base64    = canvas.toDataURL('image/jpeg', 0.85).split(',')[1]
+    mediaType = 'image/jpeg'
+  } else {
+    // PDF — convert directly
+    base64 = await new Promise((res, rej) => {
+      const reader = new FileReader()
+      reader.onload  = () => res(reader.result.split(',')[1])
+      reader.onerror = rej
+      reader.readAsDataURL(file)
+    })
+    mediaType = 'application/pdf'
+  }
 
   const edgeFnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/eyepik-extract`
 
@@ -176,18 +192,10 @@ export async function extractDocumentWithAI(file, companyType) {
       'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY,
       'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
     },
-    body: JSON.stringify({
-      base64,
-      mediaType:   file.type || 'image/jpeg',
-      companyType,
-    }),
+    body: JSON.stringify({ base64, mediaType, companyType }),
   })
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`AI extraction failed: ${err}`)
-  }
-
+  if (!res.ok) throw new Error(`AI extraction failed: ${await res.text()}`)
   return await res.json()
 }
 
