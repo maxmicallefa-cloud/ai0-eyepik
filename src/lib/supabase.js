@@ -172,31 +172,39 @@ export const uploadDocumentFile = async (file, companyId, userId) => {
   return { url: data.publicUrl, type: file.type, path }
 }
 
-// ── AI extraction via Edge Function (avoids CORS) ─────────────────────────
-export async function extractDocumentWithAI(file, companyType) {
-  let base64, mediaType
+// Replace the extractDocumentWithAI function in src/lib/supabase.js with this:
 
-  // For images: resize to max 1200px to reduce payload size
-  if (file.type.startsWith('image/')) {
-    const bitmap = await createImageBitmap(file)
-    const canvas = document.createElement('canvas')
-    const MAX = 1200
-    const ratio = Math.min(MAX / bitmap.width, MAX / bitmap.height, 1)
-    canvas.width  = Math.round(bitmap.width  * ratio)
-    canvas.height = Math.round(bitmap.height * ratio)
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-    base64    = canvas.toDataURL('image/jpeg', 0.85).split(',')[1]
-    mediaType = 'image/jpeg'
-  } else {
-    // PDF — convert directly
-    base64 = await new Promise((res, rej) => {
-      const reader = new FileReader()
-      reader.onload  = () => res(reader.result.split(',')[1])
-      reader.onerror = rej
-      reader.readAsDataURL(file)
-    })
-    mediaType = 'application/pdf'
-  }
+export async function extractDocumentWithAI(files, companyType) {
+  // Accept single file or array of files
+  const fileArray = Array.isArray(files) ? files : [files]
+
+  // Convert each file to base64 and resize images
+  const pages = await Promise.all(fileArray.map(async (file) => {
+    let base64, mediaType
+
+    if (file.type.startsWith('image/')) {
+      // Resize to max 1200px
+      const bitmap = await createImageBitmap(file)
+      const canvas = document.createElement('canvas')
+      const MAX = 1200
+      const ratio = Math.min(MAX / bitmap.width, MAX / bitmap.height, 1)
+      canvas.width  = Math.round(bitmap.width  * ratio)
+      canvas.height = Math.round(bitmap.height * ratio)
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+      base64    = canvas.toDataURL('image/jpeg', 0.82).split(',')[1]
+      mediaType = 'image/jpeg'
+    } else {
+      base64 = await new Promise((res, rej) => {
+        const reader = new FileReader()
+        reader.onload  = () => res(reader.result.split(',')[1])
+        reader.onerror = rej
+        reader.readAsDataURL(file)
+      })
+      mediaType = 'application/pdf'
+    }
+
+    return { base64, mediaType }
+  }))
 
   const edgeFnUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/eyepik-extract`
 
@@ -207,7 +215,13 @@ export async function extractDocumentWithAI(file, companyType) {
       'apikey':        import.meta.env.VITE_SUPABASE_ANON_KEY,
       'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
     },
-    body: JSON.stringify({ base64, mediaType, companyType }),
+    body: JSON.stringify({
+      pages,
+      companyType,
+      // Also send single page format for backwards compatibility
+      base64:    pages[0].base64,
+      mediaType: pages[0].mediaType,
+    }),
   })
 
   if (!res.ok) throw new Error(`AI extraction failed: ${await res.text()}`)
