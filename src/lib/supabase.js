@@ -27,6 +27,17 @@ export const createCompany = async (userId, data) => {
   return row
 }
 
+// Convert DD/MM/YYYY or DD-MM-YYYY to YYYY-MM-DD
+function normalizeDate(val) {
+  if (!val) return null
+  // Already correct format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val
+  // DD/MM/YYYY or DD-MM-YYYY
+  const m = val.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/)
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+  return null
+}
+
 export const updateCompany = async (id, patch) => {
   const { data, error } = await supabase
     .from('eyepik_companies').update(patch).eq('id', id).select().single()
@@ -52,9 +63,13 @@ export const getDocuments = async (companyId) => {
 
 export const createDocument = async (doc) => {
   const { line_items, ...docData } = doc
+  // Normalize dates
+  const DATE_FIELDS = ['document_date','due_date','period_from','period_to','confirmed_at']
+  DATE_FIELDS.forEach(f => { if (docData[f]) docData[f] = normalizeDate(docData[f]) })
   const { data, error } = await supabase
     .from('eyepik_documents').insert(docData).select().single()
   if (error) throw error
+
 
   // Save line items if any
   if (line_items?.length > 0) {
